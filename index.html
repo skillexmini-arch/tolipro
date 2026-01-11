@@ -1,117 +1,270 @@
-<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>RandoMusic</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
-    <style>
-        body { background: #05070a; color: white; font-family: sans-serif; height: 100vh; margin: 0; overflow: hidden; display: flex; flex-direction: column; align-items: center; justify-content: space-around; }
-        .btn-play { width: 220px; height: 220px; border-radius: 50%; background: #6366f1; border: none; box-shadow: 0 0 50px rgba(99, 102, 241, 0.4); display: flex; align-items: center; justify-content: center; z-index: 10; cursor: pointer; }
-        .btn-play:active { transform: scale(0.95); }
-        .visualizer { position: absolute; width: 350px; height: 350px; pointer-events: none; z-index: 5; }
-        #setup { position: fixed; inset: 0; background: #05070a; z-index: 100; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 20px; text-align: center; }
-        .progress-container { width: 80%; max-width: 300px; height: 4px; background: rgba(255,255,255,0.1); border-radius: 2px; margin-top: 20px; }
-        #progress-bar { height: 100%; background: #6366f1; width: 0%; transition: width 0.1s; }
-    </style>
-</head>
-<body>
+import React, { useState, useEffect, useRef } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, collection, doc, setDoc, onSnapshot, deleteDoc } from 'firebase/firestore';
+import { getStorage, ref, uploadBytesResumable, getDownloadURL, deleteObject, uploadString } from 'firebase/storage';
+import { 
+  LucidePlay, LucideMusic, LucideRefreshCw, 
+  LucideUpload, LucideTrash2, LucideX, LucideFolder, LucideChevronLeft, LucideSettings 
+} from 'lucide-react';
 
-    <div id="setup">
-        <i class="fas fa-folder-open text-6xl text-indigo-500 mb-6"></i>
-        <h1 class="text-2xl font-bold mb-2">Configuración</h1>
-        <p class="text-gray-400 mb-8 text-sm">Selecciona tu carpeta de música para empezar.</p>
-        <label class="bg-white text-black px-8 py-4 rounded-full font-bold cursor-pointer">
-            ELEGIR CARPETA
-            <input type="file" id="folder-input" webkitdirectory directory multiple class="hidden">
-        </label>
-    </div>
+// Configuración de Firebase
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const storage = getStorage(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'randomusic-tv-final-v1';
 
-    <div class="text-center">
-        <h1 class="text-3xl font-black italic tracking-tighter">RANDOMUSIC</h1>
-        <p id="count" class="text-indigo-400 text-[10px] font-bold mt-2 uppercase tracking-widest"></p>
-    </div>
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [tracks, setTracks] = useState([]);
+  const [currentTrack, setCurrentTrack] = useState(null);
+  const [progress, setProgress] = useState(0);
+  const [loading, setLoading] = useState(true);
+  
+  // Estados de Administrador
+  const [isAdminMode, setIsAdminMode] = useState(false);
+  const [showAdminIcon, setShowAdminIcon] = useState(false);
+  const [folderView, setFolderView] = useState(null);
+  const [uploadStatus, setUploadStatus] = useState(null);
 
-    <div class="relative flex items-center justify-center">
-        <canvas id="visualizer" class="visualizer"></canvas>
-        <button id="play-btn" class="btn-play">
-            <i id="icon" class="fas fa-play text-5xl"></i>
-        </button>
-    </div>
+  const audioRef = useRef(new Audio());
+  const canvasRef = useRef(null);
+  const analyzerRef = useRef(null);
+  const animationRef = useRef(null);
+  const playButtonRef = useRef(null);
+  const pressTimer = useRef(null);
 
-    <div class="w-full flex flex-col items-center">
-        <p id="song-name" class="text-sm font-medium text-gray-400 px-6 truncate max-w-xs"></p>
-        <div class="progress-container">
-            <div id="progress-bar"></div>
-        </div>
-    </div>
-
-    <audio id="player"></audio>
-
-    <script>
-        const player = document.getElementById('player');
-        const playBtn = document.getElementById('play-btn');
-        const folderInput = document.getElementById('folder-input');
-        const setup = document.getElementById('setup');
-        const songName = document.getElementById('song-name');
-        const icon = document.getElementById('icon');
-        const progressBar = document.getElementById('progress-bar');
-        const countDisplay = document.getElementById('count');
-
-        let tracks = [];
-        let context, analyser, src, data;
-
-        folderInput.onchange = (e) => {
-            tracks = Array.from(e.target.files).filter(f => f.type.startsWith('audio/'));
-            if (tracks.length > 0) {
-                setup.style.display = 'none';
-                countDisplay.innerText = `${tracks.length} Canciones`;
-            }
-        };
-
-        playBtn.onclick = () => {
-            if (tracks.length === 0) return;
-            
-            if (!context) {
-                context = new (window.AudioContext || window.webkitAudioContext)();
-                analyser = context.createAnalyser();
-                src = context.createMediaElementSource(player);
-                src.connect(analyser);
-                analyser.connect(context.destination);
-                analyser.fftSize = 128;
-                data = new Uint8Array(analyser.frequencyBinCount);
-                draw();
-            }
-
-            const randomTrack = tracks[Math.floor(Math.random() * tracks.length)];
-            player.src = URL.createObjectURL(randomTrack);
-            songName.innerText = randomTrack.name;
-            icon.className = "fas fa-pause";
-            player.play();
-        };
-
-        function draw() {
-            requestAnimationFrame(draw);
-            analyser.getByteFrequencyData(data);
-            const canvas = document.getElementById('visualizer');
-            const ctx = canvas.getContext('2d');
-            canvas.width = 350; canvas.height = 350;
-            const cx = 175, cy = 175, r = 115;
-            data.forEach((v, i) => {
-                const a = (i / data.length) * Math.PI * 2;
-                const l = (v / 255) * 50;
-                ctx.beginPath();
-                ctx.strokeStyle = `hsla(${230 + i}, 70%, 60%, 0.8)`;
-                ctx.lineWidth = 3;
-                ctx.moveTo(cx + Math.cos(a)*r, cy + Math.sin(a)*r);
-                ctx.lineTo(cx + Math.cos(a)*(r+l), cy + Math.sin(a)*(r+l));
-                ctx.stroke();
-            });
+  // 1. Inicialización y Autenticación
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInAnonymously(auth);
+        } else {
+          await signInAnonymously(auth);
         }
+      } catch (e) { console.error("Error en Auth:", e); }
+    };
+    initAuth();
 
-        player.ontimeupdate = () => progressBar.style.width = (player.currentTime / player.duration * 100) + '%';
-        player.onended = () => playBtn.onclick();
-    </script>
-</body>
-</html>
+    // 2. Control Remoto de Android TV (Mapeo de Teclas)
+    const handleTVRemote = (e) => {
+      // 13 = OK/Enter, 32 = Espacio (Común en mandos de TV)
+      if ((e.keyCode === 13 || e.keyCode === 32) && !isAdminMode) {
+        e.preventDefault();
+        playRandom();
+      }
+    };
+    window.addEventListener('keydown', handleTVRemote);
+
+    return onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      if (u) {
+        setLoading(false);
+        // Foco automático para que el mando de la TV sepa dónde está el botón
+        setTimeout(() => playButtonRef.current?.focus(), 800);
+      }
+    });
+  }, [isAdminMode]);
+
+  // 3. Escuchar cambios en la base de datos (Streaming en tiempo real)
+  useEffect(() => {
+    if (!user) return;
+    const q = collection(db, 'artifacts', appId, 'public', 'data', 'library');
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setTracks(data);
+    }, (error) => console.error("Error Firestore:", error));
+    return () => unsubscribe();
+  }, [user]);
+
+  // 4. Sincronización de Audio y Barra de Progreso
+  useEffect(() => {
+    const audio = audioRef.current;
+    audio.preload = "auto";
+    const updateProgress = () => setProgress((audio.currentTime / audio.duration) * 100 || 0);
+    const onTrackEnd = () => playRandom();
+
+    audio.addEventListener('timeupdate', updateProgress);
+    audio.addEventListener('ended', onTrackEnd);
+    return () => {
+      audio.removeEventListener('timeupdate', updateProgress);
+      audio.removeEventListener('ended', onTrackEnd);
+    };
+  }, [tracks]);
+
+  // Lógica de "Clic Largo" para el Gestor (Celular)
+  const startPress = () => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('admin') !== 'true') return;
+    pressTimer.current = setTimeout(() => setShowAdminIcon(true), 3000);
+  };
+  const endPress = () => clearTimeout(pressTimer.current);
+
+  // Visualizador optimizado para CPU de TV
+  const initVisualizer = () => {
+    if (analyzerRef.current) return;
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      const ctx = new AudioCtx();
+      const analyzer = ctx.createAnalyser();
+      const source = ctx.createMediaElementSource(audioRef.current);
+      source.connect(analyzer);
+      analyzer.connect(ctx.destination);
+      analyzer.fftSize = 128; // Optimizado para no lagear la TV
+      analyzerRef.current = analyzer;
+
+      const renderFrame = () => {
+        animationRef.current = requestAnimationFrame(renderFrame);
+        const data = new Uint8Array(analyzer.frequencyBinCount);
+        analyzer.getByteFrequencyData(data);
+        if (!canvasRef.current) return;
+        const cctx = canvasRef.current.getContext('2d');
+        cctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+        const cx = canvasRef.current.width / 2, cy = canvasRef.current.height / 2, r = 120;
+        data.forEach((v, i) => {
+          const a = (i / data.length) * Math.PI * 2;
+          const l = (v / 255) * 55;
+          cctx.beginPath();
+          cctx.strokeStyle = `hsla(${240 + i * 2}, 80%, 60%, 0.6)`;
+          cctx.lineWidth = 6;
+          cctx.lineCap = 'round';
+          cctx.moveTo(cx + Math.cos(a) * r, cy + Math.sin(a) * r);
+          cctx.lineTo(cx + Math.cos(a) * (r + l), cy + Math.sin(a) * (r + l));
+          cctx.stroke();
+        });
+      };
+      renderFrame();
+    } catch (e) { console.warn("Audio Context no soportado"); }
+  };
+
+  const playRandom = () => {
+    if (tracks.length === 0) return;
+    initVisualizer();
+    let next;
+    if (tracks.length > 1) {
+      do { next = tracks[Math.floor(Math.random() * tracks.length)]; } 
+      while (currentTrack && next.id === currentTrack.id);
+    } else { next = tracks[0]; }
+    
+    setCurrentTrack(next);
+    audioRef.current.crossOrigin = "anonymous";
+    audioRef.current.src = next.url;
+    audioRef.current.play().catch(e => console.error("Error de reproducción:", e));
+  };
+
+  // --- LÓGICA DE GESTOR (Subida desde Celular) ---
+  const handleUpload = async (e) => {
+    const files = Array.from(e.target.files).filter(f => f.type.startsWith('audio/'));
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const folder = file.webkitRelativePath.split('/')[0] || "General";
+      const id = `${Date.now()}-${i}`;
+      setUploadStatus(`Subiendo ${i+1}/${files.length}...`);
+      
+      const mRef = ref(storage, `artifacts/${appId}/music/${id}-${file.name}`);
+      const task = uploadBytesResumable(mRef, file);
+      
+      task.on('state_changed', null, null, async () => {
+        const url = await getDownloadURL(task.snapshot.ref);
+        await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'library', id), {
+          name: file.name.replace(/\.[^/.]+$/, ""),
+          url, folder, storagePath: mRef.fullPath
+        });
+        if (i === files.length - 1) setUploadStatus(null);
+      });
+    }
+  };
+
+  if (loading && !isAdminMode) return (
+    <div className="h-screen bg-[#06080c] flex items-center justify-center text-indigo-500 font-black animate-pulse uppercase tracking-[0.3em]">
+      Sincronizando TV...
+    </div>
+  );
+
+  return (
+    <div className="h-screen bg-[#06080c] text-white flex flex-col items-center justify-around p-12 overflow-hidden relative select-none font-sans">
+      
+      {showAdminIcon && (
+        <button onClick={() => setIsAdminMode(true)} className="absolute top-12 right-12 text-gray-800 hover:text-indigo-400 focus:text-indigo-500 outline-none animate-bounce z-50">
+          <LucideSettings className="w-14 h-14" />
+        </button>
+      )}
+
+      <div 
+        className="text-center cursor-pointer active:scale-95 transition-transform"
+        onMouseDown={startPress} onMouseUp={endPress}
+        onTouchStart={startPress} onTouchEnd={endPress}
+      >
+        <h1 className="text-7xl font-black italic tracking-tighter">RANDO<span className="text-indigo-500">MUSIC</span></h1>
+        <p className="text-[10px] font-bold text-indigo-400/20 tracking-[1.2em] mt-4 uppercase">Android TV Edition</p>
+      </div>
+
+      <div className="relative flex items-center justify-center w-full max-w-lg aspect-square">
+        <canvas ref={canvasRef} width={600} height={600} className="absolute inset-0 w-full h-full scale-125 opacity-70" />
+        
+        <button 
+          ref={playButtonRef}
+          onClick={playRandom}
+          className="w-80 h-80 rounded-full overflow-hidden z-10 border-[10px] border-white/5 shadow-[0_0_80px_rgba(0,0,0,0.5)] relative flex items-center justify-center bg-gray-900 focus:scale-110 focus:border-indigo-600 hover:scale-105 active:scale-95 outline-none transition-all group"
+        >
+          {currentTrack?.coverUrl ? (
+            <img src={currentTrack.coverUrl} className="w-full h-full object-cover animate-in fade-in zoom-in duration-500" alt="Cover" />
+          ) : (
+            <LucideMusic className="w-32 h-32 text-indigo-500/10" />
+          )}
+          
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/30 group-focus:bg-black/10 transition-colors">
+            <LucidePlay className="w-28 h-28 fill-white drop-shadow-2xl mb-2" />
+            <span className="text-[10px] font-black tracking-[0.3em] bg-indigo-600 px-6 py-2 rounded-full shadow-2xl">PULSAR OK</span>
+          </div>
+        </button>
+      </div>
+
+      <div className="w-full max-w-2xl text-center z-10">
+        <h2 className="text-4xl font-bold text-white truncate mb-10 drop-shadow-2xl px-12 h-12">
+          {currentTrack ? currentTrack.name : "BIENVENIDA"}
+        </h2>
+        <div className="h-5 bg-gray-950 rounded-full w-full overflow-hidden border border-white/5 shadow-inner">
+          <div className="h-full bg-indigo-500 shadow-[0_0_30px_rgba(99,102,241,1)] transition-all duration-300" style={{ width: `${progress}%` }} />
+        </div>
+      </div>
+
+      {/* GESTOR DE NUBE (Celular) */}
+      {isAdminMode && (
+        <div className="fixed inset-0 bg-[#06080c] z-[100] flex flex-col p-12 pt-24 overflow-y-auto animate-in slide-in-from-bottom-full duration-500">
+          <button onClick={() => setIsAdminMode(false)} className="absolute top-10 right-10 p-5 bg-gray-900 rounded-full active:bg-red-500 transition-colors"><LucideX className="w-8 h-8"/></button>
+          <h2 className="text-5xl font-black mb-12 uppercase italic tracking-tighter">Panel de <span className="text-indigo-500">Gestión</span></h2>
+          
+          <label className="w-full bg-indigo-600 p-10 rounded-[2rem] font-bold text-center mb-16 cursor-pointer flex items-center justify-center gap-6 shadow-2xl active:scale-95 transition-transform">
+             {uploadStatus ? <><LucideRefreshCw className="animate-spin w-10 h-10" /> {uploadStatus}</> : <><LucideUpload className="w-10 h-10" /> SUBIR CARPETA MP3</>}
+             <input type="file" webkitdirectory="true" directory="true" multiple className="hidden" onChange={handleUpload} />
+          </label>
+
+          <div className="space-y-6 pb-20">
+            {[...new Set(tracks.map(t => t.folder))].map(f => (
+              <div key={f} className="flex items-center justify-between p-8 bg-gray-900/40 rounded-[1.5rem] border border-white/5 shadow-xl">
+                <div className="flex items-center gap-8 cursor-pointer flex-1" onClick={() => setFolderView(f)}>
+                  <div className="p-5 bg-indigo-500/10 rounded-2xl text-indigo-400"><LucideFolder className="w-10 h-10 fill-current" /></div>
+                  <span className="text-2xl font-bold truncate">{f}</span>
+                </div>
+                <button onClick={() => {
+                  if(confirm(`¿Eliminar la carpeta "${f}" y todas sus canciones?`)) {
+                    tracks.filter(t => t.folder === f).forEach(async (t) => {
+                      try {
+                        await deleteObject(ref(storage, t.storagePath));
+                        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'library', t.id));
+                      } catch (e) { console.error(e); }
+                    });
+                  }
+                }} className="p-4 text-gray-800 hover:text-red-500 transition-colors"><LucideTrash2 className="w-10 h-10"/></button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
